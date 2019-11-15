@@ -6,9 +6,9 @@
 // no-op and simply returns the original value.
 EnableTraceOutput = true;
 
-Config_DriverName = "Amazon Redshift (x86)";
+Config_DriverName = "Amazon Redshift (x64)";
 Config_SqlConformance = ODBC[SQL_SC][SQL_SC_SQL92_FULL];  // null, 1, 2, 4, 8
-Config_DefaultUsernamePasswordHandling = true;  // true, false
+Config_DefaultUsernamePasswordHandling = false;  // true, false
 Config_UseParameterBindings = true;  // true, false, null
 Config_StringLiterateEscapeCharacters  = { "\" }; // ex. { "\" }
 Config_UseCastInsteadOfConvert = true; // true, false, null
@@ -25,21 +25,59 @@ ImplicitTypeConversions = #table(
 [DataSource.Kind="RedshiftODBC", Publish="RedshiftODBC.UI"]
 shared RedshiftODBC.Database = (server as text, database as text, optional options as record) as table =>
     let
-        ConnectionString = GetAddress(server) & [
-            Driver = Config_DriverName,
-            UseUnicode = "yes",
-            Database = database
-        ],
-
         Credential = Extension.CurrentCredential(),
-        encryptionEnabled = Credential[EncryptConnection]? = true,
-		CredentialConnectionString = [
+        ConnectionString = 
+        if Credential[AuthenticationKind]? = "Key" then 
+            GetAddress(server) & [
+                Dsn = Credential[Key],
+                UseUnicode = "yes",
+                Database = database
+            ]
+        
+        else
+            GetAddress(server) & [
+                Driver = Config_DriverName,
+                UseUnicode = "yes",
+                Database = database
+            ],
+
+        encryptionEnabled = /*Credential[EncryptConnection]? =*/ true,
+		CredentialConnectionString = 
+
+        // Use Azure AD authentication with manually put in credentials
+        /*
+        if AzureAD = true then
+        [
+            SSLMode = if encryptionEnabled then "verify-full" else "prefer",
+            UID = Credential[Username],
+            PWD = Credential[Password],
+            idp_tenant = idp_tenant,
+            client_secret = client_secret,
+            client_id = client_id,
+            BoolsAsChar = 0,
+            MaxVarchar = 65535
+        ]
+        */
+
+        // Use Azure AD with previously configured dsn
+        if Credential[AuthenticationKind]? = "Key" then 
+        [
+            SSLMode = if encryptionEnabled then "verify-full" else "prefer",
+            BoolsAsChar = 0,
+            MaxVarchar = 65535
+        ]
+        
+        // Use Azure AD with previously configured dsn, or use basic username password
+        else if Credential[AuthenticationKind]? = "UsernamePassword" then 
+        [
             SSLMode = if encryptionEnabled then "verify-full" else "prefer",
             UID = Credential[Username],
             PWD = Credential[Password],
             BoolsAsChar = 0,
             MaxVarchar = 65535
-        ],
+        ]
+        else
+                error Error.Record("Error", "Unhandled authentication kind: " & Credential[AuthenticationKind]?),
         
         defaultConfig = BuildOdbcConfig(),
 
@@ -213,12 +251,18 @@ RedshiftODBC = [
             server = json[server],
             database = json[database]
         in
-            { "RedshiftODBC.Database", server, database },
+            { "RedshiftODBC.Database", server, database},
     Authentication = [
         UsernamePassword = [
+            Label = "Basic"
+        ],
+        Key = [
+            KeyLabel = "DSN",
+            Label = "Azure AD DSN"
         ]
     ],
-    SupportsEncryption = true
+    Label = "Amazon Redshift",
+    //SupportsEncryption = true
 ];
 
 RedshiftODBC.UI = [
